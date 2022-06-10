@@ -1,0 +1,10 @@
+# @package _group_
+
+defaults:
+  - params: local_tensorf_identity
+  - dataset: shiny_dense
+  - model: shiny_tensorf_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+

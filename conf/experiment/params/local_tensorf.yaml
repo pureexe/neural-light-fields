@@ -1,9 +1,9 @@
 # @package _group_
 
-ckpt_dir: /data/pakkapon/nlf_experiment/neural-light-fields/checkpoints
+ckpt_dir: checkpoints
 log_dir: /data/pakkapon/nlf_experiment/neural-light-fields/logs
 data_dir: data
-name: "${experiment.dataset.name}_${experiment.dataset.collection}"
+name: "${experiment.dataset.name}_${experiment.dataset.collection}_tensorf"
 
 print_loss: False
 save_results: True

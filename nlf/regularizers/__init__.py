@@ -16,6 +16,7 @@ from .ray_interpolation import RayInterpolationRegularizer
 from .teacher import TeacherRegularizer, BlurryTeacherRegularizer
 from .voxel_sparsity import VoxelSparsityRegularizer
 from .warp import WarpRegularizer, WarpLevelSetRegularizer
+from .total_variation import TotalVariationRegularizer
 
 regularizer_dict = {
     'ray_depth': RayDepthRegularizer,
@@ -32,4 +33,5 @@ regularizer_dict = {
     'voxel_sparsity': VoxelSparsityRegularizer,
     'warp': WarpRegularizer,
     'warp_level': WarpLevelSetRegularizer,
+    'total_variation': TotalVariationRegularizer
 }

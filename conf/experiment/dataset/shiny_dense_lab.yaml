@@ -1,7 +1,7 @@
 # @package _group_
 
 name: shiny
-collection: cd
+collection: lab
 data_subdir: shiny
 root_dir: "/home/pakkapon/mnt_tl_Vision01/data/orbiter/datasets/shiny_for_eval/${experiment.dataset.collection}/"
 

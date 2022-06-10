@@ -63,6 +63,60 @@ class BaseNet(nn.Module):
     def set_iter(self, i):
         pass
 
+class TwoPlaneTensoRF(nn.Module):
+    #TODO: proper support coarse to fine
+    #TODO: support advance intitialize
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+
+        if in_channels != 4:
+            raise Exception("TwoPlaneTensoRF only lightfield location (4 inputs)")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        #TODO: need to read from config
+        self.n_comp = cfg.n_comp
+        scale = cfg.initial_scale
+        plane_width = cfg.plane_init[1]
+        plane_heigth = cfg.plane_init[0]
+        self.activation = get_activation(cfg.activation)
+
+        # uv plane and st plane is a 2 slab represent in light field 
+        # however, output channel is design for multiple output 
+        # in case of RGB (out_channel = 3) each uv_plane contain n_comp*3, you have sum the result seperately 
+        # this can be done by permute to the last channel and then reshape to (n_comp,3) and sum over n_comp
+        self.uv_planes = torch.nn.Parameter(scale * (2 * torch.randn((1, self.n_comp * out_channels, plane_heigth, plane_width)) - 1))
+        self.st_planes = torch.nn.Parameter(scale * (2 * torch.randn((1, self.n_comp * out_channels, plane_heigth, plane_width)) - 1))
+        self.bounds = torch.tensor(cfg.bounds)
+
+    def grid_normalize(self, x):
+        # normalzie value
+        bounds = self.bounds.to(x.device)
+        lower = bounds[0:1].expand(x.shape[0],-1)
+        upper = bounds[1:2].expand(x.shape[0],-1)
+
+        norm_x = (x - lower) / (upper - lower) #normalize 
+        #norm_x = torch.clip(norm_x,0.0,1.0) #clip over/under 1.0
+        norm_x = (norm_x * 2.0) - 1.0
+        return norm_x
+        
+    
+    def forward(self, x, sigma_only=False):
+        uvst_grid = self.grid_normalize(x)[None,None]
+        assert torch.min(uvst_grid) > -1.0
+        assert torch.max(uvst_grid) < 1.0
+        uv = uvst_grid[...,:2]
+        st = uvst_grid[...,2:]
+        # uv_planes #torch.Size([1, 48, 300, 300])
+        uv_feature = torch.nn.functional.grid_sample(self.uv_planes, uv, mode='bilinear',align_corners=True)[0,:,0]
+        st_feature = torch.nn.functional.grid_sample(self.st_planes, st, mode='bilinear',align_corners=True)[0,:,0]
+        feature = uv_feature * st_feature #outer product in TensoRF
+        feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels)
+        feature = torch.sum(feature,dim=1) #combine product across componenet
+        # TODO: lookup code
+        output = self.activation(feature)
+        return output
 
 class NeRFNet(nn.Module):
     def __init__(
@@ -142,4 +196,5 @@ class NeRFNet(nn.Module):
 net_dict = {
     'base': BaseNet,
     'nerf': NeRFNet,
+    'twoplane_tensorf': TwoPlaneTensoRF
 }

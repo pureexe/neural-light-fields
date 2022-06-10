@@ -1,0 +1,23 @@
+# @package _group_
+
+ckpt_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/checkpoints
+log_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/logs
+data_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/data
+name: "simplelightfield_test"
+
+print_loss: False
+save_results: True
+
+tensorboard: False
+log_images: False
+log_videos: False
+
+test_only: False
+render_only: False
+load_from_weights: False
+start_epoch: 0
+
+seed: 1
+
+save_video_dir: "${experiment.params.name}/val_videos"
+save_image_dir: "${experiment.params.name}/val_images"

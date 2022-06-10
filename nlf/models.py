@@ -39,12 +39,10 @@ class BaseLightfieldModel(nn.Module):
         **kwargs
     ):
         super().__init__()
-
         self.cfg = cfg
         self.pes = []
         self.embeddings = []
         self.models = []
-
         if 'latent_dim' in kwargs:
             self.latent_dim = kwargs['latent_dim']
         else:
@@ -87,12 +85,11 @@ class BaseLightfieldModel(nn.Module):
         )
 
         self.pes += [self.embedding_pe]
-
+        
         self.embedding_net = embedding_dict[cfg.embedding_net.type](
             self.embedding_pe.out_channels + self.latent_out_channels,
             cfg.embedding_net,
         )
-
         self.embeddings += [self.embedding_net]
 
     def set_iter(self, i):
@@ -255,6 +252,91 @@ class LightfieldModel(BaseLightfieldModel):
         else:
             return outputs
 
+class TensorLightfieldModel(BaseLightfieldModel):
+    def __init__(
+        self,
+        cfg,
+        **kwargs
+    ):
+        super().__init__(cfg, **kwargs)
+
+        self.use_latent_color = cfg.use_latent_color if 'use_latent_color' in cfg else False
+
+        """
+        ## Positional encoding and skip connection
+        self.color_pe = pe_dict[cfg.color_pe.type](
+            self.embedding_net.out_channels,
+            cfg.color_pe
+        )
+        self.pes += [self.color_pe]
+
+        color_model_in_channels = self.color_pe.out_channels
+        """
+
+        ## Subdivision
+        if self.is_subdivided and self.use_latent_color:
+            raise NotImplementError("is_subdividied is not support by default of TensorLightField")
+
+        light_field_channel = 4
+        ## Color network
+        self.color_model = net_dict[cfg.color_net.type](
+            light_field_channel,
+            self.num_outputs,
+            cfg.color_net,
+        )
+
+        self.models += [self.color_model]
+
+        ## Add pes to embeddings
+        self.embeddings += self.pes
+
+    def forward(self, rays, **render_kwargs):
+        if 'embed_params' in render_kwargs and render_kwargs['embed_params']:
+            raise NotImplementError("Embed params is not support yet")
+        if self.is_subdivided and self.use_latent_color:
+            raise NotImplementError("is_subdivided and use_latent_color is not support yet")
+
+        uvst_rays = self.embed(rays, **render_kwargs)
+        outputs = self.color_model(uvst_rays)
+        
+        return outputs
+
+class SimpleLightfieldModel(BaseLightfieldModel):
+    def __init__(
+        self,
+        cfg,
+        **kwargs
+    ):
+        super().__init__(cfg, **kwargs)
+
+        self.use_latent_color = cfg.use_latent_color if 'use_latent_color' in cfg else False
+
+        ## Positional encoding and skip connection
+        self.color_pe = pe_dict[cfg.color_pe.type](
+            self.embedding_net.out_channels,
+            cfg.color_pe
+        )
+        self.pes += [self.color_pe]
+
+        color_model_in_channels = self.color_pe.out_channels
+
+        ## Color network
+        self.color_model = net_dict[cfg.color_net.type](
+            color_model_in_channels,
+            self.num_outputs,
+            cfg.color_net,
+        )
+
+        self.models += [self.color_model]
+
+        ## Add pes to embeddings
+        self.embeddings += self.pes
+
+    def forward(self, rays, **render_kwargs):
+        uvst = self.embed(rays, **render_kwargs)
+        embed_rays = self.color_pe(uvst, **render_kwargs)
+        outputs = self.color_model(embed_rays)
+        return outputs
 
 class BasisModel(BaseLightfieldModel):
     def __init__(
@@ -472,6 +554,7 @@ class MultipleLightfieldModel(BaseLightfieldModel):
 
 
 ray_model_dict = {
+    'tensorfield': TensorLightfieldModel,
     'lightfield': LightfieldModel,
     'multiple_lightfield': MultipleLightfieldModel,
 }
@@ -699,7 +782,9 @@ class LatentSubdividedModel(SubdividedModel):
 
 
 model_dict = {
+    'tensorfield': TensorLightfieldModel,
     'lightfield': LightfieldModel,
+    'simplelightfield': SimpleLightfieldModel,
     'basis': BasisModel,
     'multiple_lightfield': MultipleLightfieldModel,
     'subdivided_lightfield': SubdividedModel,
