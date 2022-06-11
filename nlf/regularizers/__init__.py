@@ -17,6 +17,7 @@ from .teacher import TeacherRegularizer, BlurryTeacherRegularizer
 from .voxel_sparsity import VoxelSparsityRegularizer
 from .warp import WarpRegularizer, WarpLevelSetRegularizer
 from .total_variation import TotalVariationRegularizer
+from .twoplane_c2f import TwoPlaneC2F
 
 regularizer_dict = {
     'ray_depth': RayDepthRegularizer,
@@ -33,5 +34,6 @@ regularizer_dict = {
     'voxel_sparsity': VoxelSparsityRegularizer,
     'warp': WarpRegularizer,
     'warp_level': WarpLevelSetRegularizer,
-    'total_variation': TotalVariationRegularizer
+    'total_variation': TotalVariationRegularizer,
+    'twoplane_c2f': TwoPlaneC2F
 }

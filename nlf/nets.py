@@ -6,6 +6,8 @@
 
 import torch
 from torch import nn
+import torch.nn.functional as F
+import numpy as np 
 
 from nlf.embedding import WindowedPE
 from nlf.activations import get_activation
@@ -63,19 +65,95 @@ class BaseNet(nn.Module):
     def set_iter(self, i):
         pass
 
+class TwoPlaneCoarse2FineTensorRF(nn.Module):
+    #this model will keep "all" planes size which eatting up the memory.
+    #TODO: instead of use multiple level like this, we must has BIG tensor but use partial of it to train until reach final state
+
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+        if in_channels != 4:
+            raise Exception("TwoPlaneCoarse2FineTensorRF only lightfield location (4 inputs)")
+        
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        self.n_comp = cfg.n_comp
+        self.current_level = 0
+        self.upsampling_epoch = cfg.upsampling_epoch
+        self.bounds = torch.tensor(cfg.bounds)
+
+        self.height_step = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
+        self.width_step = self.get_stepsize(cfg.plane_init[1], cfg.plane_final[1], len(self.upsampling_epoch) + 1)
+        scale = cfg.initial_scale
+        self.activation = get_activation(cfg.activation)
+        print("Expected width")
+        print(self.width_step)
+        self.uv_planes = []
+        self.st_planes = []
+
+
+        for i in range(len(self.upsampling_epoch) + 1):
+            plane_shape = (1, self.n_comp * out_channels, self.height_step[i], self.width_step[i])
+            self.uv_planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+            self.st_planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+        
+        self.uv_planes = torch.nn.ParameterList(self.uv_planes)
+        self.st_planes = torch.nn.ParameterList(self.st_planes)
+
+    def set_level(self, level):
+        self.current_level = level
+        prev = level-1
+        if prev >= 0:
+            #interpolate value from previous level
+            with torch.no_grad():
+                H = self.height_step[level]
+                W = self.width_step[level]
+                print("Set plane resolution to: (",H,",",W,")")
+                uv_plane = F.interpolate(self.uv_planes[prev].data, size=(H, W), mode='bilinear',  align_corners=True)
+                st_plane = F.interpolate(self.st_planes[prev].data, size=(H, W), mode='bilinear',  align_corners=True)
+                self.uv_planes[level].data = (uv_plane)
+                self.st_planes[level].data = (st_plane)
+
+
+    def get_stepsize(self, init, final, step):
+        #linear in log space
+        return (torch.round(torch.exp(torch.linspace(np.log(init), np.log(final), step))).long()).tolist()
+
+    def grid_normalize(self, x):
+        # normalzie value
+        bounds = self.bounds.to(x.device)
+        lower = bounds[0:1].expand(x.shape[0],-1)
+        upper = bounds[1:2].expand(x.shape[0],-1)
+
+        norm_x = (x - lower) / (upper - lower) #normalize 
+        #norm_x = torch.clip(norm_x,0.0,1.0) #clip over/under 1.0
+        norm_x = (norm_x * 2.0) - 1.0
+        return norm_x
+            
+    def forward(self, x, sigma_only=False):
+        uvst_grid = self.grid_normalize(x)[None,None]
+        uv = uvst_grid[...,:2]
+        st = uvst_grid[...,2:]
+        # uv_planes #torch.Size([1, 48, 300, 300])
+        uv_feature = torch.nn.functional.grid_sample(self.uv_planes[self.current_level], uv, mode='bilinear',align_corners=True)[0,:,0]
+        st_feature = torch.nn.functional.grid_sample(self.st_planes[self.current_level], st, mode='bilinear',align_corners=True)[0,:,0]
+        feature = uv_feature * st_feature #outer product in TensoRF
+        feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels)
+        feature = torch.sum(feature,dim=1) #combine product across componenet
+        output = self.activation(feature)
+        return output
+
 class TwoPlaneTensoRF(nn.Module):
-    #TODO: proper support coarse to fine
-    #TODO: support advance intitialize
+    # for coarse to fine use TwoPlaneCoarse2FineTensorRF instead
     def __init__(self, in_channels, out_channels, cfg):
         super().__init__()
 
         if in_channels != 4:
             raise Exception("TwoPlaneTensoRF only lightfield location (4 inputs)")
-
+        
         self.in_channels = in_channels
         self.out_channels = out_channels
         
-        #TODO: need to read from config
         self.n_comp = cfg.n_comp
         scale = cfg.initial_scale
         plane_width = cfg.plane_init[1]
@@ -196,5 +274,6 @@ class NeRFNet(nn.Module):
 net_dict = {
     'base': BaseNet,
     'nerf': NeRFNet,
-    'twoplane_tensorf': TwoPlaneTensoRF
+    'twoplane_tensorf': TwoPlaneTensoRF,
+    'twoplane_c2f_tensorf': TwoPlaneCoarse2FineTensorRF
 }

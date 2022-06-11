@@ -23,6 +23,11 @@ class TotalVariationRegularizer(BaseRegularizer):
         if color_model_name == "TwoPlaneTensoRF":
             # in UV,ST mode
             loss = self.tv_weight * (plane_tv(color_model.uv_planes) + plane_tv(color_model.st_planes))
+        elif color_model_name == "TwoPlaneCoarse2FineTensorRF":
+            lvl = color_model.current_level
+            uv_plane = color_model.uv_planes[lvl]
+            st_plane = color_model.st_planes[lvl]
+            loss = self.tv_weight * (plane_tv(uv_plane) + plane_tv(st_plane))
         else:
             raise Exception("No totalvariation apply, please remove from config file if not use")
         return loss
