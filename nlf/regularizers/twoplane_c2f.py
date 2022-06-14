@@ -14,7 +14,7 @@ class TwoPlaneC2F(BaseRegularizer):
     ):
         super().__init__(system, cfg)
         self.epoch_counter = 0
-
+        self.compatible_with_set_level = ["TwoPlaneCoarse2FineTensorRF", "CPdecomposition"]
 
     def loss(self, batch, batch_idx):
         #actually, there is nothing to do with batch 
@@ -28,7 +28,7 @@ class TwoPlaneC2F(BaseRegularizer):
         if not require_check:
             return 0.0
         color_model_name = type(color_model).__name__
-        if color_model_name == "TwoPlaneCoarse2FineTensorRF":
+        if color_model_name in self.compatible_with_set_level:
             if epoch in color_model.upsampling_epoch:
                 for idx, epoch_id in enumerate(color_model.upsampling_epoch):                    
                     if epoch_id == epoch:

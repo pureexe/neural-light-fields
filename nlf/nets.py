@@ -65,7 +65,134 @@ class BaseNet(nn.Module):
     def set_iter(self, i):
         pass
 
-class TwoPlaneCoarse2FineTensorRF(nn.Module):
+class TensoRFBase(nn.Module):
+    # TensoRF base model for share function
+    def __init__(self):
+        super().__init__()
+
+    def get_stepsize(self, init, final, step):
+        #linear in log space
+        return (torch.round(torch.exp(torch.linspace(np.log(init), np.log(final), step))).long()).tolist()
+
+    def grid_normalize(self, x):
+        # normalzie value
+        bounds = self.bounds.to(x.device)
+        lower = bounds[0:1].expand(x.shape[0],-1)
+        upper = bounds[1:2].expand(x.shape[0],-1)
+
+        norm_x = (x - lower) / (upper - lower) #normalize 
+        #norm_x = torch.clip(norm_x,0.0,1.0) #clip over/under 1.0
+        norm_x = (norm_x * 2.0) - 1.0
+        with torch.no_grad():
+            if torch.min(norm_x) < -1.0: print('caution: norm_x underflow detected')
+            if torch.min(norm_x) > 1.0: print('caution: norm_x overflow detected')
+        return norm_x
+
+class CPdecomposition(TensoRFBase):
+    # CANDECOMP/PARAFAC decompsotion proposed in tensoRF
+
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels        
+
+        self.n_comp = cfg.n_comp
+        self.current_level = 0
+        self.upsampling_epoch = cfg.upsampling_epoch
+        self.bounds = torch.tensor(cfg.bounds)
+        self.width_size = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
+        scale = cfg.initial_scale
+        self.activation = get_activation(cfg.activation)
+        print("Expected width")
+        print(self.width_size)
+        
+        # planes contain level-of-plane while each plane contain height as input channel and width
+        self.planes = []
+        for i in range(len(self.upsampling_epoch) + 1):
+            plane_shape = (1, self.n_comp * out_channels, in_channels, self.width_size[i])
+            self.planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+        self.planes = torch.nn.ParameterList(self.planes)
+        self.in_channels_loc = torch.linspace(-1, 1, in_channels)
+    
+    def set_level(self,level):
+        self.current_level = level
+        prev = level-1
+        if prev >= 0:
+            with torch.no_grad():
+                H = self.in_channels
+                W = self.width_size[level]
+                plane = F.interpolate(self.planes[prev].data, size=(H, W), mode='bilinear',  align_corners=True)
+                self.planes[level].data = (plane)
+    
+    def forward(self, x, sigma_only=False):
+        grid = self.grid_normalize(x) #(num_ray, in_channel)
+        h_loc = self.in_channels_loc.to(grid.device).view(1,-1).expand(grid.shape[0],-1)
+        grid = torch.cat([h_loc[...,None], grid[..., None]], dim=-1)[None,:] #(1,  num_ray, in_channel, 2)
+        feature = torch.nn.functional.grid_sample(self.planes[self.current_level], grid, mode='bilinear',align_corners=True)[0] #[outchannel*component, num_ray, in_channel]
+        feature = torch.prod(feature, dim=-1) #[out_channel*component, num_ray]: combine (outer product) across each input
+        feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels) #[num_ray, component, out_channel]
+        feature = torch.sum(feature,dim=1) #combine product across componenet #[num_ray, out_channel]
+        output = self.activation(feature)
+        return output
+
+class PlaneDecomposition(TensoRFBase):
+    # decomposition as vector of plane
+
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels     
+
+        if in_channels % 2 != 0:
+            raise Exception("Vector decomposition is require to an even input channel (%2==0)")   
+
+        self.n_comp = cfg.n_comp
+        self.current_level = 0
+        self.upsampling_epoch = cfg.upsampling_epoch
+        self.bounds = torch.tensor(cfg.bounds)
+        self.height_size = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
+        self.width_size = self.get_stepsize(cfg.plane_init[1], cfg.plane_final[1], len(self.upsampling_epoch) + 1)
+        scale = cfg.initial_scale
+        self.activation = get_activation(cfg.activation)
+        print("Expected width")
+        print(self.width_size)
+        
+        # planes contain level-of-plane while each plane contain height as input channel and width
+        self.planes = []
+        for i in range(len(self.upsampling_epoch) + 1):
+            plane_shape = (1, self.n_comp * out_channels, in_channels // 2, self.height_size[i], self.width_size[i])
+            self.planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+        self.planes = torch.nn.ParameterList(self.planes)
+        self.in_channels_loc = torch.linspace(-1, 1, in_channels // 2)
+    
+    def set_level(self,level):
+        self.current_level = level
+        prev = level-1
+        if prev >= 0:
+            with torch.no_grad():
+                D = self.in_channels
+                H = self.height_size[level]
+                W = self.width_size[level]
+                plane = F.interpolate(self.planes[prev].data, size=(D, H, W), mode='trilinear',  align_corners=True)
+                self.planes[level].data = (plane)
+    
+    def forward(self, x, sigma_only=False):
+        grid = self.grid_normalize(x) #(num_ray, in_channel)
+        grid = grid.view(grid.shape[0],-1,2)
+        h_loc = self.in_channels_loc.to(grid.device).view(1,1,-1).expand(grid.shape[0],grid.shape[1],-1)
+        grid = torch.cat([h_loc[...,None], grid[..., None]], dim=-1)[None,:] #(1,  num_ray, in_channel//2, 3)
+        raise Exception("Require a proper support of F.gridsample")
+        feature = torch.nn.functional.grid_sample(self.planes[self.current_level], grid, mode='bilinear',align_corners=True)[0] #[outchannel*component, num_ray, in_channel]
+        feature = torch.prod(feature, dim=-1) #[out_channel*component, num_ray]: combine (outer product) across each input
+        feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels) #[num_ray, component, out_channel]
+        feature = torch.sum(feature,dim=1) #combine product across componenet #[num_ray, out_channel]
+        output = self.activation(feature)
+        return output
+
+
+class TwoPlaneCoarse2FineTensorRF(TensoRFBase):
     #this model will keep "all" planes size which eatting up the memory.
     #TODO: instead of use multiple level like this, we must has BIG tensor but use partial of it to train until reach final state
 
@@ -113,22 +240,6 @@ class TwoPlaneCoarse2FineTensorRF(nn.Module):
                 st_plane = F.interpolate(self.st_planes[prev].data, size=(H, W), mode='bilinear',  align_corners=True)
                 self.uv_planes[level].data = (uv_plane)
                 self.st_planes[level].data = (st_plane)
-
-
-    def get_stepsize(self, init, final, step):
-        #linear in log space
-        return (torch.round(torch.exp(torch.linspace(np.log(init), np.log(final), step))).long()).tolist()
-
-    def grid_normalize(self, x):
-        # normalzie value
-        bounds = self.bounds.to(x.device)
-        lower = bounds[0:1].expand(x.shape[0],-1)
-        upper = bounds[1:2].expand(x.shape[0],-1)
-
-        norm_x = (x - lower) / (upper - lower) #normalize 
-        #norm_x = torch.clip(norm_x,0.0,1.0) #clip over/under 1.0
-        norm_x = (norm_x * 2.0) - 1.0
-        return norm_x
             
     def forward(self, x, sigma_only=False):
         uvst_grid = self.grid_normalize(x)[None,None]
@@ -169,6 +280,7 @@ class TwoPlaneTensoRF(nn.Module):
         self.bounds = torch.tensor(cfg.bounds)
 
     def grid_normalize(self, x):
+        #print("######\n#########\n#####\n start normalize \n #############\n ########## \n ##############")
         # normalzie value
         bounds = self.bounds.to(x.device)
         lower = bounds[0:1].expand(x.shape[0],-1)
@@ -275,5 +387,6 @@ net_dict = {
     'base': BaseNet,
     'nerf': NeRFNet,
     'twoplane_tensorf': TwoPlaneTensoRF,
-    'twoplane_c2f_tensorf': TwoPlaneCoarse2FineTensorRF
+    'twoplane_c2f_tensorf': TwoPlaneCoarse2FineTensorRF,
+    'cp_decomposition': CPdecomposition
 }

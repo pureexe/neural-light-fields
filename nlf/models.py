@@ -276,8 +276,9 @@ class TensorLightfieldModel(BaseLightfieldModel):
         ## Subdivision
         if self.is_subdivided and self.use_latent_color:
             raise NotImplementError("is_subdividied is not support by default of TensorLightField")
+        
+        light_field_channel = 4 if cfg.embedding_net.type == 'identity' else cfg.embedding_net.tform_out_channels
 
-        light_field_channel = 4
         ## Color network
         self.color_model = net_dict[cfg.color_net.type](
             light_field_channel,

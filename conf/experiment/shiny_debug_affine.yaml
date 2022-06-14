@@ -1,0 +1,14 @@
+# @package _group_
+
+defaults:
+  - params: local
+  - dataset: shiny_dense_lab
+  - model: shiny_affine
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+  - _self_
+
+# TODO: add regularizer TV  
+params:
+  name: shiny_debug_affine

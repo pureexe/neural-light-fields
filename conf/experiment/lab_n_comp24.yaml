@@ -1,0 +1,33 @@
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_tensorf_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+  - _self_
+
+# TODO: add regularizer TV  
+params:
+  name: lab_n_comp24
+
+training:
+  val_every: 1
+
+regularizers:
+  total_variation:
+    type: total_variation
+    weight: 1e-4
+  twoplane_c2f:
+    type: twoplane_c2f
+
+model:
+  color_net:
+    activation: sigmoid
+    type: twoplane_c2f_tensorf
+    initial_scale: 1e-4
+    bounds: [[-1.5,-1.5,-1.5,-1.5], [1.5, 1.5, 1.5, 1.5]]
+    upsampling_epoch: [4, 8, 16, 32]
+    n_comp: 24
+    plane_init: [64,64]
+    plane_final: [1024,1024]
