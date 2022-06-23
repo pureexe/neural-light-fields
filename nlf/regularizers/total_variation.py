@@ -28,6 +28,18 @@ class TotalVariationRegularizer(BaseRegularizer):
             uv_plane = color_model.uv_planes[lvl]
             st_plane = color_model.st_planes[lvl]
             loss = self.tv_weight * (plane_tv(uv_plane) + plane_tv(st_plane))
+        elif color_model_name == "PlaneDecomposition":
+            lvl = color_model.current_level
+            plane = color_model.planes[lvl]
+            loss = self.tv_weight * (plane_tv(plane))
+        elif color_model_name == "PlaneListOfDecomposition":
+            lvl = color_model.current_level
+            ppl = color_model.plane_per_lvl
+            loss = 0.0
+            for i in range(ppl):
+                plane = color_model.planes[lvl * ppl + i]
+                loss = loss +  plane_tv(plane)
+            loss = self.tv_weight * loss
         elif color_model_name == "CPdecomposition":
             lvl = color_model.current_level
             plane = color_model.planes[lvl]
@@ -50,6 +62,23 @@ def plane_tv(x):
     tv = (h_tv / count_h) + (w_tv / count_w) 
     tv = 2*tv*batch_size
     return tv
+
+def plane_tv3d(x):
+    batch_size = x.shape[0]
+    count_c = x.shape[1]
+    count_d = x.shape[2]
+
+    count_h = torch.prod(torch.tensor(x[...,1:,:].shape))
+    count_w = torch.prod(torch.tensor(x[...,:,1:].shape))
+    h_tv = torch.pow((x[...,1:,:]-x[...,:-1,:]),2).sum()
+    w_tv = torch.pow((x[...,1:]-x[...,:-1]),2).sum()
+    tv = (h_tv / count_h) + (w_tv / count_w) 
+    tv = tv / count_c
+    tv = tv / count_d
+    
+    tv = 2*tv*batch_size
+    return tv
+
 
 def line_tv(x):
     """

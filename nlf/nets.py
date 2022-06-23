@@ -83,9 +83,6 @@ class TensoRFBase(nn.Module):
         norm_x = (x - lower) / (upper - lower) #normalize 
         #norm_x = torch.clip(norm_x,0.0,1.0) #clip over/under 1.0
         norm_x = (norm_x * 2.0) - 1.0
-        with torch.no_grad():
-            if torch.min(norm_x) < -1.0: print('caution: norm_x underflow detected')
-            if torch.min(norm_x) > 1.0: print('caution: norm_x overflow detected')
         return norm_x
 
 class CPdecomposition(TensoRFBase):
@@ -138,7 +135,6 @@ class CPdecomposition(TensoRFBase):
 
 class PlaneDecomposition(TensoRFBase):
     # decomposition as vector of plane
-
     def __init__(self, in_channels, out_channels, cfg):
         super().__init__()
 
@@ -172,25 +168,84 @@ class PlaneDecomposition(TensoRFBase):
         prev = level-1
         if prev >= 0:
             with torch.no_grad():
-                D = self.in_channels
+                D = self.in_channels // 2
                 H = self.height_size[level]
                 W = self.width_size[level]
+                print("Set plane resolution to: (",D,",",H,",",W,")")
                 plane = F.interpolate(self.planes[prev].data, size=(D, H, W), mode='trilinear',  align_corners=True)
                 self.planes[level].data = (plane)
     
     def forward(self, x, sigma_only=False):
         grid = self.grid_normalize(x) #(num_ray, in_channel)
-        grid = grid.view(grid.shape[0],-1,2)
-        h_loc = self.in_channels_loc.to(grid.device).view(1,1,-1).expand(grid.shape[0],grid.shape[1],-1)
-        grid = torch.cat([h_loc[...,None], grid[..., None]], dim=-1)[None,:] #(1,  num_ray, in_channel//2, 3)
-        raise Exception("Require a proper support of F.gridsample")
-        feature = torch.nn.functional.grid_sample(self.planes[self.current_level], grid, mode='bilinear',align_corners=True)[0] #[outchannel*component, num_ray, in_channel]
-        feature = torch.prod(feature, dim=-1) #[out_channel*component, num_ray]: combine (outer product) across each input
+        grid = grid.view(grid.shape[0],-1,2) #(num_ray, in_channel // 2, 2)
+        h_loc = self.in_channels_loc.to(grid.device).view(1,-1,1).expand(grid.shape[0],-1,-1) #(num_ray, in_channel // 2, 1)
+        grid = torch.cat([grid, h_loc], dim=-1) #(num_ray, in_channel//2, 3) h_loc need to be last due to x,y,z format [32768, 2, 3])
+        grid = grid.permute(1,0,2)[None]  #(1, in_channel//2, num_ray, 1, 3) #NDH3
+        grid = grid[...,None,:]  #NDHW3
+        feature = torch.nn.functional.grid_sample(self.planes[self.current_level], grid, mode='bilinear',align_corners=True)[0][...,0] #[outchannel*component, in_channel//2, num_ray]
+        feature = torch.prod(feature, dim=-2) #[out_channel*component, num_ray]: combine (outer product) across each input
         feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels) #[num_ray, component, out_channel]
         feature = torch.sum(feature,dim=1) #combine product across componenet #[num_ray, out_channel]
         output = self.activation(feature)
         return output
 
+"""
+class PlaneListOfDecomposition(TensoRFBase):
+    # decomposition as vector of plane
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+        if in_channels != 4:
+            raise Exception("TwoPlaneCoarse2FineTensorRF only lightfield location (4 inputs)")
+        
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.plane_per_lvl = in_channels // 2
+        
+        self.n_comp = cfg.n_comp
+        self.current_level = 0
+        self.upsampling_epoch = cfg.upsampling_epoch
+        self.bounds = torch.tensor(cfg.bounds)
+
+        self.height_size = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
+        self.width_size = self.get_stepsize(cfg.plane_init[1], cfg.plane_final[1], len(self.upsampling_epoch) + 1)
+        scale = cfg.initial_scale
+        self.activation = get_activation(cfg.activation)
+        print("Expected width")
+        print(self.width_size)
+        # planes contain level-of-plane while each plane contain height as input channel and width
+        self.planes = []
+        for i in range(len(self.upsampling_epoch) + 1):
+            plane_shape = (1, self.n_comp * out_channels, self.height_size[i], self.width_size[i])
+            for j in range(in_channels // 2):
+                self.planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+        self.planes = torch.nn.ParameterList(self.planes)
+        
+    def set_level(self,level):
+        self.current_level = level
+        prev = level-1
+        if prev >= 0:
+            with torch.no_grad():
+                H = self.height_size[level]
+                W = self.width_size[level]
+                print("Set plane resolution to: (",H,",",W,")")
+                for i in range(self.plane_per_lvl):
+                    plane = F.interpolate(self.planes[prev*self.plane_per_lvl+i].data, size=(H, W), mode='bilinear',  align_corners=True)
+                    self.planes[level*self.plane_per_lvl+i].data = (plane)
+    
+    def forward(self, x, sigma_only=False):
+        uvst_grid = self.grid_normalize(x)[None,None]
+        combined_feature = None
+        for i in range(self.plane_per_lvl):
+            plane_id = self.current_level * self.plane_per_lvl + i
+            uv = uvst_grid[...,i*2:(i+1)*2]
+            feature = torch.nn.functional.grid_sample(self.planes[plane_id], uv, mode='bilinear',align_corners=True)[0,:,0]
+            combined_feature = feature if i == 0 else combined_feature * feature
+        feature = combined_feature.permute(1,0).view(-1,self.n_comp,self.out_channels)
+        feature = torch.sum(feature,dim=1) #combine product across componenet
+        output = self.activation(feature)
+        return output
+    
+"""
 
 class TwoPlaneCoarse2FineTensorRF(TensoRFBase):
     #this model will keep "all" planes size which eatting up the memory.
@@ -388,5 +443,6 @@ net_dict = {
     'nerf': NeRFNet,
     'twoplane_tensorf': TwoPlaneTensoRF,
     'twoplane_c2f_tensorf': TwoPlaneCoarse2FineTensorRF,
-    'cp_decomposition': CPdecomposition
+    'cp_decomposition': CPdecomposition,
+    'plane_decomposition': PlaneDecomposition
 }
