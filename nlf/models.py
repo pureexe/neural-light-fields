@@ -30,6 +30,7 @@ from nlf.rendering import ( # noqa
 )
 
 from nlf.activations import get_activation
+from tqdm.auto import tqdm
 
 
 class BaseLightfieldModel(nn.Module):
@@ -262,17 +263,6 @@ class TensorLightfieldModel(BaseLightfieldModel):
 
         self.use_latent_color = cfg.use_latent_color if 'use_latent_color' in cfg else False
 
-        """
-        ## Positional encoding and skip connection
-        self.color_pe = pe_dict[cfg.color_pe.type](
-            self.embedding_net.out_channels,
-            cfg.color_pe
-        )
-        self.pes += [self.color_pe]
-
-        color_model_in_channels = self.color_pe.out_channels
-        """
-
         ## Subdivision
         if self.is_subdivided and self.use_latent_color:
             raise NotImplementError("is_subdividied is not support by default of TensorLightField")
@@ -290,6 +280,7 @@ class TensorLightfieldModel(BaseLightfieldModel):
 
         ## Add pes to embeddings
         self.embeddings += self.pes
+        
 
     def forward(self, rays, **render_kwargs):
         if 'embed_params' in render_kwargs and render_kwargs['embed_params']:
@@ -781,6 +772,104 @@ class LatentSubdividedModel(SubdividedModel):
 
         return self.fuse_outputs(ray_outputs, pos_outputs)
 
+class InitialTensorLightfieldModel(TensorLightfieldModel):
+    def __init__(self,*args,**kwargs):
+        print(")(())()()(()()(() INITIAL ()()()()()(()(()()(()())")
+        super().__init__(*args, **kwargs)
+
+    def prepare_data(self, datamodule):
+        self.datamodule = datamodule
+        self.initial_color()
+    
+    def initial_color(self):
+        """
+        Initial color_model with datamodule
+        Here is brielfy step
+        1. We devide image into multiple componenet by just directly divid it
+        - let say 32 componenents: comp = img / 32
+        2. then we seperate each componenet into UV and ST plane by 
+        - uv = st = sqrt(comp)
+        """
+        color_model_name = type(self.color_model).__name__ 
+        print("################## Dataloader needed to re-implement ##############################")
+        with torch.no_grad():
+            if color_model_name == 'TwoPlaneTensoRF':
+                NUM_COLORCH = 3
+                BATCH_SIZE = 80000
+                DEVICE = 'cuda'
+                train_dataloader = torch.utils.data.DataLoader(self.datamodule.train_dataset, batch_size=BATCH_SIZE, shuffle=False)
+                uv_planes = torch.zeros_like(self.color_model.uv_planes.data).to(DEVICE)
+                st_planes = torch.zeros_like(self.color_model.st_planes.data).to(DEVICE)
+                uv_count = torch.zeros_like(uv_planes)
+                st_count = torch.zeros_like(st_planes)
+                num_comp = uv_count.shape[1] // NUM_COLORCH
+                for batch in tqdm(train_dataloader):
+                    batch = self.datamodule.train_dataset.format_batch(batch)
+                    rgbs = batch['rgb'].to(DEVICE) #batch, 3
+                    rgb_data = (torch.sqrt(rgbs.permute(1,0)) / num_comp).repeat(num_comp, 4) # 4 is stand for 4 corners
+                    uvsts = self.embed(batch['rays']).to(DEVICE)
+                    assert uvsts.shape[-1] == 4
+                    uvst_norms = self.color_model.grid_normalize(uvsts)
+                    uvst_loc = self.norm2loc(uvst_norms, [uv_count.shape[-2],uv_count.shape[-1],st_count.shape[-2],st_count.shape[-1]])
+                    uv_loc = uvst_loc[...,:2]
+                    st_loc = uvst_loc[...,2:4]
+                    # uodate uv plane
+                    corners, weights = self.corner_weights(uv_loc)
+                    uv_weights = weights[None].expand(rgb_data.shape[0], -1)
+                    rgb_uv = rgb_data * uv_weights
+                    uv_planes[0,:,corners[:,1], corners[:,0]] = rgb_uv
+                    uv_count[0,:,corners[:,1], corners[:,0]] = uv_count[0,:,corners[:,1], corners[:,0]] + uv_weights
+                    # update st_planes
+                    corners, weights = self.corner_weights(st_loc)
+                    st_weights = weights[None].expand(rgb_data.shape[0], -1)
+                    rgb_st = rgb_data * st_weights
+                    st_planes[0,:,corners[:,1], corners[:,0]] = rgb_st
+                    st_count[0,:,corners[:,1], corners[:,0]] = st_count[0,:,corners[:,1], corners[:,0]] + st_weights
+
+                # avoid devide by 0
+                uv_count[uv_count == 0.0] = 1.0
+                st_count[st_count == 0.0] = 1.0
+                # normalize weight
+                uv_planes = uv_planes / uv_count
+                st_planes = st_planes / st_count
+                # update weight back to the model
+                self.color_model.uv_planes.data = uv_planes.cpu()
+                self.color_model.st_planes.data = st_planes.cpu()
+            else:   
+                raise NotImplementError(color_model_name + " is not support by IntialTensorLightfieldModel")
+
+    def norm2loc(self, pos, sizes):
+        pos = (pos + 1.0) / 2.0
+        for i in range(len(sizes)):
+            pos[..., i] = pos[...,i] * sizes[i]
+        return pos
+
+    def corner_weights(self, pos):
+        """
+        get weight and corer for inverse bilinear
+        # l = left, r = right, t = top, b=bottom
+        @oaram pos - position in #[batch, 2]
+        @return corners -  #[4 * batch, 2]
+        @return weights - #[4 * batch]
+        """
+        x = pos[...,0:1]
+        y = pos[...,1:2]
+        lt = torch.floor(pos)
+        lb = torch.cat([torch.floor(x),torch.ceil(y)], dim=-1)
+        rt = torch.cat([torch.ceil(x),torch.floor(y)], dim=-1)
+        rb = torch.ceil(pos)
+        npos = pos - lt
+        lt_w = (1.0 - npos[...,0]) * (1.0 - npos[...,1])
+        rt_w = (npos[...,0]) * (1.0 - npos[...,1])
+        lb_w = (1.0 - npos[...,0]) * (npos[...,1])
+        rb_w = (npos[...,0]) * (npos[...,1]) 
+        weights = torch.cat([lt_w, rt_w, lb_w, rb_w],dim=0)
+        corners = torch.cat([lt, rt, lb, rb],dim=0)
+        return corners.long(), weights
+    
+
+
+
 
 model_dict = {
     'tensorfield': TensorLightfieldModel,
@@ -790,4 +879,5 @@ model_dict = {
     'multiple_lightfield': MultipleLightfieldModel,
     'subdivided_lightfield': SubdividedModel,
     'latent_subdivided_lightfield': LatentSubdividedModel,
+    'initial_tensor': InitialTensorLightfieldModel
 }

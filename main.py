@@ -138,6 +138,10 @@ def run(cfg: DictConfig, log_dir: str, model_dir: str, workflow_id: str) -> None
     else:
         system = LightfieldSystem(cfg)
 
+    #PURE: some model require datamodule hook
+    if hasattr(system.render_fn.model, 'prepare_data'):
+        system.render_fn.model.prepare_data(dm)
+
     trainer.fit(system, datamodule=dm)
 
 
