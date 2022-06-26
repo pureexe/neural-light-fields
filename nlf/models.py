@@ -31,6 +31,9 @@ from nlf.rendering import ( # noqa
 
 from nlf.activations import get_activation
 from tqdm.auto import tqdm
+import numpy as np
+from matplotlib import pyplot as plt
+from skimage import io
 
 
 class BaseLightfieldModel(nn.Module):
@@ -774,7 +777,6 @@ class LatentSubdividedModel(SubdividedModel):
 
 class InitialTensorLightfieldModel(TensorLightfieldModel):
     def __init__(self,*args,**kwargs):
-        print(")(())()()(()()(() INITIAL ()()()()()(()(()()(()())")
         super().__init__(*args, **kwargs)
 
     def prepare_data(self, datamodule):
@@ -791,50 +793,65 @@ class InitialTensorLightfieldModel(TensorLightfieldModel):
         - uv = st = sqrt(comp)
         """
         color_model_name = type(self.color_model).__name__ 
-        print("################## Dataloader needed to re-implement ##############################")
         with torch.no_grad():
             if color_model_name == 'TwoPlaneTensoRF':
                 NUM_COLORCH = 3
-                BATCH_SIZE = 80000
-                DEVICE = 'cuda'
+                MAX_IMAGE = 10
+                #BATCH_SIZE = 35784 #1 images
+                BATCH_SIZE = 143136 #1 images 504*284
+                DEVICE = 'cpu'
+                
                 train_dataloader = torch.utils.data.DataLoader(self.datamodule.train_dataset, batch_size=BATCH_SIZE, shuffle=False)
-                uv_planes = torch.zeros_like(self.color_model.uv_planes.data).to(DEVICE)
-                st_planes = torch.zeros_like(self.color_model.st_planes.data).to(DEVICE)
+                uv_planes = torch.zeros_like(self.color_model.uv_planes.data)# .to(DEVICE)
+                st_planes = torch.zeros_like(self.color_model.st_planes.data)# .to(DEVICE)
                 uv_count = torch.zeros_like(uv_planes)
                 st_count = torch.zeros_like(st_planes)
                 num_comp = uv_count.shape[1] // NUM_COLORCH
+
+                i = 0
                 for batch in tqdm(train_dataloader):
+                    i += 1
                     batch = self.datamodule.train_dataset.format_batch(batch)
-                    rgbs = batch['rgb'].to(DEVICE) #batch, 3
-                    rgb_data = (torch.sqrt(rgbs.permute(1,0)) / num_comp).repeat(num_comp, 4) # 4 is stand for 4 corners
-                    uvsts = self.embed(batch['rays']).to(DEVICE)
-                    assert uvsts.shape[-1] == 4
+                    rgbs = batch['rgb'] #.to(DEVICE) #batch, 3
+                    #rgb_data = (rgbs.permute(1,0) / num_comp)
+                    rgb_data = torch.sqrt(rgbs.permute(1,0) / num_comp)
+                    rgb_data = torch.repeat_interleave(rgb_data, num_comp, 0)
+                    rgb_data = torch.repeat_interleave(rgb_data, 4, 1)
+                    uvsts = self.embed(batch['rays'])# .to(DEVICE)
                     uvst_norms = self.color_model.grid_normalize(uvsts)
                     uvst_loc = self.norm2loc(uvst_norms, [uv_count.shape[-2],uv_count.shape[-1],st_count.shape[-2],st_count.shape[-1]])
                     uv_loc = uvst_loc[...,:2]
                     st_loc = uvst_loc[...,2:4]
                     # uodate uv plane
-                    corners, weights = self.corner_weights(uv_loc)
-                    uv_weights = weights[None].expand(rgb_data.shape[0], -1)
+                    corners, weights = self.corner_weights(uv_loc)  
+                    # uv planes
+                    uv_weights = torch.repeat_interleave(weights[None], rgb_data.shape[0], 0)
+                    uv_count[0,:,corners[:,1], corners[:,0]] = uv_count[0,:,corners[:,1], corners[:,0]] + uv_weights
                     rgb_uv = rgb_data * uv_weights
                     uv_planes[0,:,corners[:,1], corners[:,0]] = rgb_uv
-                    uv_count[0,:,corners[:,1], corners[:,0]] = uv_count[0,:,corners[:,1], corners[:,0]] + uv_weights
-                    # update st_planes
+                    # st plane
                     corners, weights = self.corner_weights(st_loc)
-                    st_weights = weights[None].expand(rgb_data.shape[0], -1)
-                    rgb_st = rgb_data * st_weights
-                    st_planes[0,:,corners[:,1], corners[:,0]] = rgb_st
+                    st_weights = torch.repeat_interleave(weights[None], rgb_data.shape[0], 0)
                     st_count[0,:,corners[:,1], corners[:,0]] = st_count[0,:,corners[:,1], corners[:,0]] + st_weights
-
-                # avoid devide by 0
+                    rgb_st = rgb_data * st_weights
+                    st_planes[0,:,corners[:,1], corners[:,0]] = st_planes[0,:,corners[:,1], corners[:,0]] + rgb_st
+                    if MAX_IMAGE == i:
+                        break
+      
                 uv_count[uv_count == 0.0] = 1.0
                 st_count[st_count == 0.0] = 1.0
                 # normalize weight
                 uv_planes = uv_planes / uv_count
                 st_planes = st_planes / st_count
+
+                io.imsave('/home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/test_img512_010_uv.png',st_planes[0].permute(1,2,0).cpu().numpy()[:,:] )
+                io.imsave('/home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/test_img512_010_st.png',st_planes[0].permute(1,2,0).cpu().numpy()[:,:] )
+
                 # update weight back to the model
                 self.color_model.uv_planes.data = uv_planes.cpu()
                 self.color_model.st_planes.data = st_planes.cpu()
+
+                
             else:   
                 raise NotImplementError(color_model_name + " is not support by IntialTensorLightfieldModel")
 
@@ -849,8 +866,8 @@ class InitialTensorLightfieldModel(TensorLightfieldModel):
         get weight and corer for inverse bilinear
         # l = left, r = right, t = top, b=bottom
         @oaram pos - position in #[batch, 2]
-        @return corners -  #[4 * batch, 2]
-        @return weights - #[4 * batch]
+        @return corners -  #[batch * 4, 2]
+        @return weights - #[batch * 4]
         """
         x = pos[...,0:1]
         y = pos[...,1:2]
@@ -863,9 +880,15 @@ class InitialTensorLightfieldModel(TensorLightfieldModel):
         rt_w = (npos[...,0]) * (1.0 - npos[...,1])
         lb_w = (1.0 - npos[...,0]) * (npos[...,1])
         rb_w = (npos[...,0]) * (npos[...,1]) 
-        weights = torch.cat([lt_w, rt_w, lb_w, rb_w],dim=0)
-        corners = torch.cat([lt, rt, lb, rb],dim=0)
+        #weights = torch.cat([lt_w, rt_w, lb_w, rb_w],dim=0)
+        #corners = torch.cat([lt, rt, lb, rb],dim=0)
+        #######
+        weights = torch.cat([lt_w[...,None], rt_w[...,None], lb_w[...,None], rb_w[...,None]],dim=-1)
+        corners = torch.cat([lt[...,None], rt[...,None], lb[...,None], rb[...,None]],dim=-1)
+        weights = weights.flatten()
+        corners = corners.permute(0,2,1).reshape(-1,2)
         return corners.long(), weights
+        #return lt.long(), lt_w
     
 
 

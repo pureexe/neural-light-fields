@@ -131,6 +131,7 @@ def run(cfg: DictConfig, log_dir: str, model_dir: str, workflow_id: str) -> None
         benchmark=True,
         profiler=None,
         reload_dataloaders_every_n_epochs=cfg.training.reload_data_every,
+        num_sanity_val_steps=-1 #validate all image
     )
 
     if last_ckpt_path is not None and cfg.params.load_from_weights:
@@ -141,7 +142,7 @@ def run(cfg: DictConfig, log_dir: str, model_dir: str, workflow_id: str) -> None
     #PURE: some model require datamodule hook
     if hasattr(system.render_fn.model, 'prepare_data'):
         system.render_fn.model.prepare_data(dm)
-
+        
     trainer.fit(system, datamodule=dm)
 
 
