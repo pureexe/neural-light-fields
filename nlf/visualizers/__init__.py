@@ -7,9 +7,12 @@
 from .closest_view import ClosestViewVisualizer
 from .epipolar import EPIVisualizer
 from .focus import FocusVisualizer
+from .plane_epi import UV_EPIVisualizer, ST_EPIVisualizer
 
 visualizer_dict = {
     'closest_view': ClosestViewVisualizer,
     'epipolar': EPIVisualizer,
     'focus': FocusVisualizer,
+    'uv_epi': UV_EPIVisualizer,
+    'st_epi': ST_EPIVisualizer
 }
