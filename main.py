@@ -152,7 +152,8 @@ def run(cfg: DictConfig, log_dir: str, model_dir: str, workflow_id: str) -> None
 
 
 def elastic_run(cfg: DictConfig):
-    if cfg.experiment.training.num_gpus > 1:
+    # PURE: VLL DIDN'T USE ELESTIC LAUNCH
+    if False and cfg.experiment.training.num_gpus > 1:
         lc = LaunchConfig(
             # Assuming devgpu testing, min = max nodes = 1
             min_nodes=1,
