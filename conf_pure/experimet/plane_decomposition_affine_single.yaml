@@ -1,0 +1,55 @@
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_tensorf_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+  - _self_
+
+# TODO: add regularizer TV  
+params:
+  name: plane_decomposition_affine_single
+
+training:
+  val_every: 1
+  render_every: 100
+  ckpt_every: 100
+  num_epochs: 100
+  
+regularizers:
+  total_variation:
+    type: total_variation
+    weight: 1e-4
+  twoplane_c2f:
+    type: twoplane_c2f
+
+model:
+  color_net:
+    activation: sigmoid
+    type: plane_decomposition
+    initial_scale: 1e-4
+    bounds: [[-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0,-3.0], [3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,3.0,]]
+    upsampling_epoch: [4,8,16]
+    n_comp: 16
+    plane_init: [64,64]
+    plane_final: [512,512]
+
+  embedding_net:
+    pe:
+      type: windowed
+      n_freqs: 0
+      wait_iters: 0
+      max_freq_iter: 0
+      exclude_identity: False
+
+    type: local_affine
+    depth: 2
+    hidden_channels: 256
+    skips: [200000]
+    param_channels: 4
+    tform_out_channels: 32
+    tform_activation: row_l2_norm
+    bias_activation: tanh
+    activation: identity
+

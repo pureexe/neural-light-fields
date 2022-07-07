@@ -1,0 +1,57 @@
+# @package _group_
+
+defaults:
+  - params: local
+  - model: llff_affine
+  - training: llff_lf
+  - regularizers: all
+  - visualizers: all
+
+params:
+  name: greendot_white_llff_01view
+  ckpt_dir: checkpoints
+  log_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/logs
+  data_dir: data
+  save_video_dir: "${experiment.params.name}/val_videos"
+  save_image_dir: "${experiment.params.name}/val_images"
+
+training:
+  num_epochs: 3
+  ckpt_every: 3
+  test_every: 3
+  val_every: 3
+
+model:
+  embedding_net:
+    type: identity
+    activation: identity
+  param:
+    n_dims: 4
+    fn: two_plane
+    near: -3
+    far: -2
+  color_net:
+    type: base
+    depth: 4
+    hidden_channels: 256
+    skips: [999999]
+
+
+dataset:
+  name: llff
+  collection: greendot_white_llff_01view
+  data_subdir: nerf_llff_data
+  root_dir: "/home/pakkapon/mnt_tl_Vision01/data/orbiter/datasets/nerf_llff_data/${experiment.dataset.collection}/"
+
+  img_wh: [400, 400]
+  spherical_poses: False
+  use_ndc: False
+
+  val_num: 1000
+  val_skip: 2
+
+  render_params:
+    interpolate: False
+    supersample: 4
+    crop: 1.0
+z

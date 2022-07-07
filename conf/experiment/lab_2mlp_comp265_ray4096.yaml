@@ -1,0 +1,38 @@
+# @package _group_
+
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+
+dataset:
+  name: shiny_raysample
+  img_wh: [1008, 567]
+
+params:
+  name: lab_2mlp_comp265_ray4096
+  tensorboard: True
+
+training:
+  val_every: 10
+  test_every: 100
+  num_epochs: 1000
+  batch_size: 4096
+  ray_chunk: 4096
+  net_chunk: 4096
+
+model:
+  type: tensorfield
+  color_net:
+    type: twoplane_mlp
+    activation: sigmoid
+    n_comp: 265
+    color_pe:
+      type: windowed
+      n_freqs: 10
+      wait_iters: 0
+      max_freq_iter: 25000
+      exclude_identity: False

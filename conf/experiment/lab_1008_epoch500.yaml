@@ -1,0 +1,62 @@
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_tensorf_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+  - _self_
+
+# TODO: add regularizer TV  
+
+dataset:
+  name: shiny_raysample
+  img_wh: [1008, 567]
+
+params:
+  name: lab_1008_epoch500
+  tensorboard: True
+
+training:
+  val_every: 100
+  test_every: 500
+  num_epochs: 500
+  ckpt_every: 500
+  batch_size: 4096
+  ray_chunk: 4096
+  net_chunk: 4096
+  #batch_size: 2
+  #ray_chunk: 32768
+  #net_chunk: 32768
+  #color:
+  #  optimizer: adam
+  #  lr: 0.001
+  #  clip: False
+  #  clip_amount: 1.0
+  #  momentum: 0.9
+  #  weight_decay: 0
+
+  #  lr_scheduler: exp
+  #  warmup_multiplier: 1.0
+  #  warmup_epochs: 1
+
+  #  decay_step: 100
+  #  decay_gamma: 0.1
+
+regularizers:
+  total_variation:
+    type: total_variation
+    weight: 1e-4
+  twoplane_c2f:
+    type: twoplane_c2f
+
+model:
+  color_net:
+    activation: sigmoid
+    type: twoplane_c2f_tensorf
+    initial_scale: 1e-4
+    bounds: [[-1.5,-1.5,-1.5,-1.5], [1.5, 1.5, 1.5, 1.5]]
+    upsampling_epoch: [4,8,16,24]
+    n_comp: 48
+    plane_init: [64,64]
+    plane_final: [1024,1024]

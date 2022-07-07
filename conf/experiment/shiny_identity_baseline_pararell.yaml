@@ -1,0 +1,28 @@
+# @package _group_
+
+defaults:
+  - params: local_tensorf
+  - dataset: shiny_dense
+  - model: shiny_tensorf_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+
+# TODO: add regularizer TV  
+params:
+  name: shiny_identity_baseline_pararell2
+  ckpt_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/checkpoints
+  log_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/logs
+  data_dir: /home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/data
+  tensorboard: True
+  log_images: True
+
+training:
+  num_gpus: 2
+  val_every: 10
+
+dataset:
+  name: shiny
+  collection: lab
+  data_subdir: shiny
+  root_dir: "/home/pakkapon/mnt_tl_Vision01/data/orbiter/datasets/shiny_for_eval/${experiment.dataset.collection}/"
