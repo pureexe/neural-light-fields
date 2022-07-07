@@ -796,7 +796,7 @@ class InitialTensorLightfieldModel(TensorLightfieldModel):
         with torch.no_grad():
             if color_model_name == 'TwoPlaneTensoRF':
                 NUM_COLORCH = 3
-                MAX_IMAGE = 10
+                MAX_IMAGE = -1
                 #BATCH_SIZE = 35784 #1 images
                 BATCH_SIZE = 143136 #1 images 504*284
                 DEVICE = 'cpu'
@@ -835,7 +835,7 @@ class InitialTensorLightfieldModel(TensorLightfieldModel):
                     st_count[0,:,corners[:,1], corners[:,0]] = st_count[0,:,corners[:,1], corners[:,0]] + st_weights
                     rgb_st = rgb_data * st_weights
                     st_planes[0,:,corners[:,1], corners[:,0]] = st_planes[0,:,corners[:,1], corners[:,0]] + rgb_st
-                    if MAX_IMAGE == i:
+                    if i > 0 and MAX_IMAGE == i:
                         break
       
                 uv_count[uv_count == 0.0] = 1.0
@@ -844,8 +844,8 @@ class InitialTensorLightfieldModel(TensorLightfieldModel):
                 uv_planes = uv_planes / uv_count
                 st_planes = st_planes / st_count
 
-                io.imsave('/home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/test_img512_010_uv.png',st_planes[0].permute(1,2,0).cpu().numpy()[:,:] )
-                io.imsave('/home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/test_img512_010_st.png',st_planes[0].permute(1,2,0).cpu().numpy()[:,:] )
+                io.imsave('/home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/test_img512_{:03d}_uv.png'.format(MAX_IMAGE),st_planes[0].permute(1,2,0).cpu().numpy()[:,:] )
+                io.imsave('/home/pakkapon/mnt_tl_Vision01/data/pakkapon/nlf_experiment/neural-light-fields/test_img512_{:03d}_st.png'.format(MAX_IMAGE),st_planes[0].permute(1,2,0).cpu().numpy()[:,:] )
 
                 # update weight back to the model
                 self.color_model.uv_planes.data = uv_planes.cpu()

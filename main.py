@@ -15,6 +15,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor
 
 from torch.distributed.launcher import (
     LaunchConfig,
@@ -119,14 +120,18 @@ def run(cfg: DictConfig, log_dir: str, model_dir: str, workflow_id: str) -> None
         cfg.training.test_every = 1
         cfg.training.val_every = 1
 
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+    
     trainer = LightfieldTrainer(
         cfg,
-        callbacks=[checkpoint_callback, weights_checkpoint_callback],
+        callbacks=[checkpoint_callback, weights_checkpoint_callback, lr_monitor],
         resume_from_checkpoint=last_ckpt_path if not cfg.params.load_from_weights else None,
         logger=logger if cfg.params.tensorboard else None,
         weights_summary=None,
         progress_bar_refresh_rate=1,
         strategy='ddp' if cfg.training.num_gpus > 1 else None,
+        #accelerator='gpu',
+        #devices=3,
         check_val_every_n_epoch=cfg.training.val_every,
         benchmark=True,
         profiler=None,

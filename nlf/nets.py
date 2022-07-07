@@ -156,12 +156,20 @@ class PlaneDecomposition(TensoRFBase):
         print(self.width_size)
         
         # planes contain level-of-plane while each plane contain height as input channel and width
+
+        # Pytorch lightning prefer to use register_buffer instead 
+        # @see https://discuss.pytorch.org/t/why-no-nn-bufferlist-like-function-for-registered-buffer-tensor/18884/2
+        # @see https://pytorch-lightning.readthedocs.io/en/1.4.0/advanced/multi_gpu.html
+       
         self.planes = []
         for i in range(len(self.upsampling_epoch) + 1):
             plane_shape = (1, self.n_comp * out_channels, in_channels // 2, self.height_size[i], self.width_size[i])
             self.planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
         self.planes = torch.nn.ParameterList(self.planes)
+
         self.in_channels_loc = torch.linspace(-1, 1, in_channels // 2)
+    
+
     
     def set_level(self,level):
         self.current_level = level
@@ -172,8 +180,10 @@ class PlaneDecomposition(TensoRFBase):
                 H = self.height_size[level]
                 W = self.width_size[level]
                 print("Set plane resolution to: (",D,",",H,",",W,")")
+                
                 plane = F.interpolate(self.planes[prev].data, size=(D, H, W), mode='trilinear',  align_corners=True)
                 self.planes[level].data = (plane)
+
     
     def forward(self, x, sigma_only=False):
         grid = self.grid_normalize(x) #(num_ray, in_channel)
@@ -183,69 +193,13 @@ class PlaneDecomposition(TensoRFBase):
         grid = grid.permute(1,0,2)[None]  #(1, in_channel//2, num_ray, 1, 3) #NDH3
         grid = grid[...,None,:]  #NDHW3
         feature = torch.nn.functional.grid_sample(self.planes[self.current_level], grid, mode='bilinear',align_corners=True)[0][...,0] #[outchannel*component, in_channel//2, num_ray]
+        #feature = torch.nn.functional.grid_sample(self.planes(self.current_level), grid, mode='bilinear',align_corners=True)[0][...,0] #[outchannel*component, in_channel//2, num_ray]
         feature = torch.prod(feature, dim=-2) #[out_channel*component, num_ray]: combine (outer product) across each input
         feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels) #[num_ray, component, out_channel]
         feature = torch.sum(feature,dim=1) #combine product across componenet #[num_ray, out_channel]
         output = self.activation(feature)
         return output
 
-"""
-class PlaneListOfDecomposition(TensoRFBase):
-    # decomposition as vector of plane
-    def __init__(self, in_channels, out_channels, cfg):
-        super().__init__()
-        if in_channels != 4:
-            raise Exception("TwoPlaneCoarse2FineTensorRF only lightfield location (4 inputs)")
-        
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.plane_per_lvl = in_channels // 2
-        
-        self.n_comp = cfg.n_comp
-        self.current_level = 0
-        self.upsampling_epoch = cfg.upsampling_epoch
-        self.bounds = torch.tensor(cfg.bounds)
-
-        self.height_size = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
-        self.width_size = self.get_stepsize(cfg.plane_init[1], cfg.plane_final[1], len(self.upsampling_epoch) + 1)
-        scale = cfg.initial_scale
-        self.activation = get_activation(cfg.activation)
-        print("Expected width")
-        print(self.width_size)
-        # planes contain level-of-plane while each plane contain height as input channel and width
-        self.planes = []
-        for i in range(len(self.upsampling_epoch) + 1):
-            plane_shape = (1, self.n_comp * out_channels, self.height_size[i], self.width_size[i])
-            for j in range(in_channels // 2):
-                self.planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
-        self.planes = torch.nn.ParameterList(self.planes)
-        
-    def set_level(self,level):
-        self.current_level = level
-        prev = level-1
-        if prev >= 0:
-            with torch.no_grad():
-                H = self.height_size[level]
-                W = self.width_size[level]
-                print("Set plane resolution to: (",H,",",W,")")
-                for i in range(self.plane_per_lvl):
-                    plane = F.interpolate(self.planes[prev*self.plane_per_lvl+i].data, size=(H, W), mode='bilinear',  align_corners=True)
-                    self.planes[level*self.plane_per_lvl+i].data = (plane)
-    
-    def forward(self, x, sigma_only=False):
-        uvst_grid = self.grid_normalize(x)[None,None]
-        combined_feature = None
-        for i in range(self.plane_per_lvl):
-            plane_id = self.current_level * self.plane_per_lvl + i
-            uv = uvst_grid[...,i*2:(i+1)*2]
-            feature = torch.nn.functional.grid_sample(self.planes[plane_id], uv, mode='bilinear',align_corners=True)[0,:,0]
-            combined_feature = feature if i == 0 else combined_feature * feature
-        feature = combined_feature.permute(1,0).view(-1,self.n_comp,self.out_channels)
-        feature = torch.sum(feature,dim=1) #combine product across componenet
-        output = self.activation(feature)
-        return output
-    
-"""
 
 class TwoPlaneCoarse2FineTensorRF(TensoRFBase):
     #this model will keep "all" planes size which eatting up the memory.
@@ -335,7 +289,6 @@ class TwoPlaneTensoRF(nn.Module):
         self.bounds = torch.tensor(cfg.bounds)
 
     def grid_normalize(self, x):
-        #print("######\n#########\n#####\n start normalize \n #############\n ########## \n ##############")
         # normalzie value
         bounds = self.bounds.to(x.device)
         lower = bounds[0:1].expand(x.shape[0],-1)
@@ -362,6 +315,49 @@ class TwoPlaneTensoRF(nn.Module):
         # TODO: lookup code
         output = self.activation(feature)
         return output
+
+class MixedTwoPlaneRF(PlaneDecomposition):
+    def __init__(self, in_channels, out_channels, cfg):
+        # we intensionly increase component 3 times for component pair [uv,st], [us,vt] and [uv,st]
+        self.e_comp = cfg.n_comp 
+        cfg.n_comp = cfg.n_comp * 3  
+        super().__init__(in_channels, out_channels, cfg)
+
+    def get_feature(self, planes, pos_plane1, pos_plane2):
+        # pos_plane1 and pos_p2 is the point on the plane shape [batch, 2]
+        grid = torch.cat([pos_plane1[:,None,:], pos_plane2[:,None,:]],dim=-2) #(num_ray, 2, 2)
+        h_loc = self.in_channels_loc.to(grid.device).view(1,-1,1).expand(grid.shape[0],-1,-1) #(num_ray, 2, 1)
+        grid = torch.cat([grid, h_loc], dim=-1) #(num_ray, in_channel//2, 3) h_loc need to be last due to x,y,z format [32768, 2, 3])
+        grid = grid.permute(1,0,2)[None]  #(1, in_channel//2, num_ray, 1, 3) #NDH3
+        grid = grid[...,None,:]  #NDHW3
+        feature = torch.nn.functional.grid_sample(planes, grid, mode='bilinear',align_corners=True)[0][...,0] #[outchannel*component, in_channel//2, num_ray]
+        feature = torch.prod(feature, dim=-2) #[out_channel*component, num_ray]: combine (outer product) across each input
+        feature = feature.permute(1,0).view(-1,self.e_comp,self.out_channels) #[num_ray, component, out_channel]
+        feature = torch.sum(feature,dim=1) #combine product across componenet #[num_ray, out_channel]
+        return feature
+
+    def forward(self, x, sigma_only=False):
+        grid = self.grid_normalize(x) #(num_ray, in_channel)
+        #there has 3 set of planes uv_st, us_vt, ut_vs
+        comp_cnt = self.e_comp * self.out_channels
+        uv = torch.cat([grid[...,0:1], grid[...,1:2]],dim=-1) #(num_ray, 1, 2)
+        st = torch.cat([grid[...,2:3], grid[...,3:4]],dim=-1)
+        us = torch.cat([grid[...,0:1], grid[...,2:3]],dim=-1)
+        vt = torch.cat([grid[...,1:2], grid[...,3:4]],dim=-1)
+        ut = torch.cat([grid[...,0:1], grid[...,3:4]],dim=-1)
+        vs = torch.cat([grid[...,1:2], grid[...,3:4]],dim=-1)
+
+        
+        uv_st = self.get_feature(self.planes[self.current_level][:,comp_cnt*0:comp_cnt*1], uv, st)
+        us_vt = self.get_feature(self.planes[self.current_level][:,comp_cnt*1:comp_cnt*2], us, vt)
+        ut_vs = self.get_feature(self.planes[self.current_level][:,comp_cnt*2:comp_cnt*3], ut, vs) 
+
+        feature = torch.cat([uv_st[...,None], us_vt[...,None], ut_vs[...,None]],dim=-1)
+        feature = torch.sum(feature,dim=-1)
+        output = self.activation(feature)
+        return output
+
+  
 
 class NeRFNet(nn.Module):
     def __init__(
@@ -438,11 +434,159 @@ class NeRFNet(nn.Module):
     def set_iter(self, i):
         pass
 
+class TwoPlaneMLP(nn.Module):
+    # split mlp to two plane
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+        self.net_depth = cfg.depth
+        self.net_width = cfg.hidden_channels
+
+        self.in_channels = in_channels
+        #self.out_channels = out_channels
+        self.n_comp = cfg.n_comp
+        self.out_channels = out_channels
+        self.skips = cfg.skips if 'skips' in cfg else []
+        self.activation = cfg.activation if 'activation' in cfg else 'sigmoid'
+        self.activation = get_activation(self.activation)
+        self.positional_encoding = WindowedPE(
+            self.in_channels,
+            cfg.color_pe
+        )
+        net_in_ch = self.positional_encoding.out_channels // 2
+        for i in range(self.net_depth):
+            if i == 0:
+                uv_p = nn.Linear(net_in_ch, self.net_width)
+                st_p = nn.Linear(net_in_ch, self.net_width)
+            elif i in self.skips:
+                uv_p = nn.Linear(self.net_width + net_in_ch, self.net_width)
+                st_p = nn.Linear(self.net_width + net_in_ch, self.net_width)
+            else:
+                uv_p = nn.Linear(self.net_width, self.net_width)
+                st_p = nn.Linear(self.net_width, self.net_width)
+
+            uv_p = nn.Sequential(uv_p, nn.ReLU(True))
+            st_p = nn.Sequential(st_p, nn.ReLU(True))
+            setattr(self, f'net_uv_{i+1}', uv_p)
+            setattr(self, f'net_st_{i+1}', st_p)
+
+      
+        self.uv_comp = nn.Sequential(
+            nn.Linear(self.net_width, self.n_comp * 3),
+        )
+        self.st_comp = nn.Sequential(
+            nn.Linear(self.net_width, self.n_comp * 3),
+        )
+
+    def forward(self, x, sigma_only=False):     
+        uv, st = torch.split(x, [2, 2], -1)
+
+        # fetch uv and st network
+        uv_enc = self.positional_encoding(uv)
+        st_enc = self.positional_encoding(st)
+
+        x_uv = uv_enc
+        x_st = st_enc
+
+        for i in range(self.net_depth):
+            if i in self.skips:
+                x_uv = torch.cat([x_uv, uv_enc], -1)
+                x_st = torch.cat([x_st, st_enc], -1)
+            x_uv = getattr(self, f'net_uv_{i+1}')(x_uv)
+            x_st = getattr(self, f'net_st_{i+1}')(x_st)
+        n_batch = x.shape[0]
+        uv_comp = self.uv_comp(x_uv).view(n_batch, -1, 3)
+        st_comp = self.st_comp(x_st).view(n_batch, -1, 3)
+
+        # combine component
+        rgb = torch.sum(uv_comp * st_comp,dim=-2)
+        rgb = self.activation(rgb)
+        return rgb
+
+class CombiPlaneMLP(nn.Module):
+
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+
+        # network pre-config
+        self.net_depth = cfg.depth
+        self.net_width = cfg.hidden_channels
+        self.in_channels = in_channels
+        self.n_comp = cfg.n_comp
+        self.out_channels = out_channels
+        self.skips = cfg.skips if 'skips' in cfg else []
+        self.activation = cfg.activation if 'activation' in cfg else 'sigmoid'
+        self.activation = get_activation(self.activation)
+        # plane combination uv,st / us,vt /  ut,sv
+        self.net_names = ['uv', 'st', 'us', 'vt', 'ut', 'sv']
+        self.positional_encoding = WindowedPE(self.in_channels // 2, cfg.color_pe)
+        for name in self.net_names:
+            self.build_net(name, self.positional_encoding.out_channels, self.n_comp * 3)
+
+    def build_net(self, name, in_channels, out_channels):
+        in_size = in_channels
+        for i in range(self.net_depth):
+            out_size = self.net_width
+            if i == self.net_depth - 1:
+                out_size = out_channels 
+            if i in self.skips:
+                in_size = self.net_width + in_channels
+            layer = nn.Linear(in_size, out_size)
+            
+            if i != self.net_depth - 1:
+                layer = nn.Sequential(layer, nn.ReLU(True))
+            else:
+                layer = nn.Sequential(layer) #last layer will has no activation
+
+            setattr(self, f'{name}_{i+1}', layer)
+            in_size = out_size
+
+    def fetch_net(self, name, x):
+        x_in = x
+        for i in range(self.net_depth):
+            if i in self.skips:
+                x = torch.cat([x, x_in], -1)
+            x = getattr(self, f'{name}_{i+1}')(x)
+        return x
+
+    def get_location(self, plane_name, x):
+        lookup_id = {'u': 0, 'v': 1, 's': 2, 't':3}
+        output = []
+        for i in plane_name:
+            output.append(x[...,lookup_id[i],None])
+        output = torch.cat(output, dim=-1)
+        return output
+
+    def forward(self, x, sigma_only=False): 
+        
+        plane_comps = []
+        buff_comp = None 
+
+        for i,name in enumerate(self.net_names):
+            loc = self.get_location(name, x)
+            enc_loc = self.positional_encoding(loc)
+            comp_rgb = self.fetch_net(name, enc_loc).view(-1, self.n_comp, 3)
+            if i % 2 == 0:
+                buff_comp = comp_rgb
+            else:
+                buff_comp = buff_comp * comp_rgb
+                buff_comp = torch.sum(buff_comp,dim=1) #ray, 3
+                plane_comps.append(buff_comp[None])
+        
+        rgb = torch.cat(plane_comps, dim=0)
+        rgb = torch.sum(rgb,dim=0) #ray, 3
+        rgb = self.activation(rgb)
+        return rgb
+
+
+
 net_dict = {
     'base': BaseNet,
     'nerf': NeRFNet,
     'twoplane_tensorf': TwoPlaneTensoRF,
+    'twoplane_mlp': TwoPlaneMLP,
+    'combiplane_mlp': CombiPlaneMLP,
     'twoplane_c2f_tensorf': TwoPlaneCoarse2FineTensorRF,
+    'mixed_twoplane': MixedTwoPlaneRF,
     'cp_decomposition': CPdecomposition,
     'plane_decomposition': PlaneDecomposition
 }

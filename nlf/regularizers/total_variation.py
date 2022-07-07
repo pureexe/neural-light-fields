@@ -28,9 +28,10 @@ class TotalVariationRegularizer(BaseRegularizer):
             uv_plane = color_model.uv_planes[lvl]
             st_plane = color_model.st_planes[lvl]
             loss = self.tv_weight * (plane_tv(uv_plane) + plane_tv(st_plane))
-        elif color_model_name == "PlaneDecomposition":
+        elif color_model_name == "PlaneDecomposition" or color_model_name == "MixedTwoPlaneRF":
             lvl = color_model.current_level
             plane = color_model.planes[lvl]
+            #plane = color_model.planes(lvl)
             loss = self.tv_weight * (plane_tv(plane))
         elif color_model_name == "PlaneListOfDecomposition":
             lvl = color_model.current_level

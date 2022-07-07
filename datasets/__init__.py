@@ -12,7 +12,7 @@ from .random import (
     RandomViewSubsetDataset,
     RandomRayLightfieldDataset,
 )
-from .shiny import ShinyDataset, DenseShinyDataset
+from .shiny import ShinyDataset, DenseShinyDataset, RaySampleShinyDataset
 from .stanford import StanfordLightfieldDataset
 from .tamul import TamulLightfieldDataset
 from .tanks import TanksDataset
@@ -29,6 +29,7 @@ dataset_dict = {
     'dense_llff': DenseLLFFDataset,
     'dense_shiny': DenseShinyDataset,
     'shiny': ShinyDataset,
+    'shiny_raysample': RaySampleShinyDataset,
     'tanks': TanksDataset,
     'blender_lightfield': BlenderLightfieldDataset,
     'stanford': StanfordLightfieldDataset,

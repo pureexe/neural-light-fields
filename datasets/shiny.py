@@ -6,6 +6,7 @@
 
 import os
 import numpy as np
+import torch
 from PIL import Image
 
 from datasets.llff import LLFFDataset
@@ -239,3 +240,28 @@ class DenseShinyDataset(ShinyDataset):
         self.directions = get_ray_directions_K(
             self.img_wh[1], self.img_wh[0], self.K
         )
+
+class RaySampleShinyDataset(ShinyDataset):
+    """
+    # using ray per each image similar to NeX
+    """
+    def __init__(self, cfg, split='train', **kwargs):
+        self.ray_per_img = 4096 if not 'ray_per_img' in cfg.dataset else cfg.dataset.ray_per_img
+        super().__init__(cfg, split, **kwargs)
+
+    def __getitem__(self, idx):
+        if self.split == 'train':
+            rand_id = int(torch.randint(low=0,high=len(self.all_rays),size=(1,)))
+            return {
+                'inputs': self.all_inputs[rand_id],
+                'W': self.img_wh[0],
+                'H': self.img_wh[1]
+            }
+        else:
+            return super().__getitem__(idx)
+    
+    def __len__(self):
+        if self.split == 'train':
+            return self.poses.shape[0] * self.ray_per_img
+        else:
+            return super().__len__()
