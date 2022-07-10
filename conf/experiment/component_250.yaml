@@ -1,0 +1,15 @@
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_tensorf_2022-07-08
+  - training: shiny_lf_2022-07-08
+  - regularizers: tv_2022-07-08
+  - visualizers: all
+  - _self_
+
+params:
+  name: component_300
+
+model:
+  color_net:
+    n_comp: 250

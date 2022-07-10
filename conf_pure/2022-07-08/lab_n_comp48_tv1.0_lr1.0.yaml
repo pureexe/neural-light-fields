@@ -9,7 +9,7 @@ defaults:
 
 # TODO: add regularizer TV  
 params:
-  name: lab_n_comp48_tv10
+  name: lab_n_comp48_tv1.0_lr1.0
   tensorboard: True
 
 
@@ -17,15 +17,17 @@ params:
 #  img_wh: [1008, 567]
 
 training:
-  val_every: 10
+  val_every: 1
   test_every: 10
   num_epochs: 1000
-  num_gpus: 2
+  color:
+    lr: 1.0
+  
 
 regularizers:
   total_variation:
     type: total_variation
-    weight: 10
+    weight: 1.0
   twoplane_c2f:
     type: twoplane_c2f
 

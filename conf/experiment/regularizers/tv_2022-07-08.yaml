@@ -1,0 +1,5 @@
+total_variation:
+  type: total_variation
+  weight: 0.1
+twoplane_c2f:
+  type: twoplane_c2f

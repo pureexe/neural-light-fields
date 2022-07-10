@@ -17,9 +17,11 @@ params:
 #  img_wh: [1008, 567]
 
 training:
-  val_every: 10
+  val_every: 1
   test_every: 10
   num_epochs: 1000
+  color:
+    lr: 1.0
 
 regularizers:
   total_variation:

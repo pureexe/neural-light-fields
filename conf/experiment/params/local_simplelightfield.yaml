@@ -8,7 +8,7 @@ name: "simplelightfield_test"
 print_loss: False
 save_results: True
 
-tensorboard: False
+tensorboard: True
 log_images: False
 log_videos: False
 
