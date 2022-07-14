@@ -23,7 +23,7 @@ class TotalVariationRegularizer(BaseRegularizer):
         if color_model_name == "TwoPlaneTensoRF":
             # in UV,ST mode
             loss = self.tv_weight * (plane_tv(color_model.uv_planes) + plane_tv(color_model.st_planes))
-        elif color_model_name == "TwoPlaneCoarse2FineTensorRF":
+        elif color_model_name in ["TwoPlaneCoarse2FineTensorRF","AppearanceTensorRF","BrightTensoRF"]:
             lvl = color_model.current_level
             uv_plane = color_model.uv_planes[lvl]
             st_plane = color_model.st_planes[lvl]

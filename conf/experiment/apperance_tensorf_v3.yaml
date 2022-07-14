@@ -1,0 +1,44 @@
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_tensorf_identity
+  - training: shiny_lf
+  - regularizers: all
+  - visualizers: all
+  - _self_
+
+# TODO: add regularizer TV  
+params:
+  name: apperance_tensorf_v3
+  tensorboard: True
+
+training:
+  val_every: 1
+  test_every: 16
+  num_epochs: 16
+  ckpt_every: 16
+  render_every: 16
+  #batch_size: 8192
+  #ray_chunk: 8192
+  #net_chunk: 8192
+
+regularizers:
+  total_variation:
+    type: total_variation
+    weight: 1e-4
+  twoplane_c2f:
+    type: twoplane_c2f
+
+model:
+  color_net:
+    basis_out: 0
+    fea_pe: 0
+    out_channels: 16
+    activation: sigmoid
+    type: apperance_tensorf
+    initial_scale: 1e-4
+    bounds: [[-1.5,-1.5,-1.5,-1.5], [1.5, 1.5, 1.5, 1.5]]
+    upsampling_epoch: [2, 4, 8] #[2, 4, 8, 14]
+    n_comp: 16
+    plane_init: [64,64]
+    plane_final: [512,512]

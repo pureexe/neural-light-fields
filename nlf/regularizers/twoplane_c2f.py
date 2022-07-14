@@ -14,7 +14,7 @@ class TwoPlaneC2F(BaseRegularizer):
     ):
         super().__init__(system, cfg)
         self.epoch_counter = 0
-        self.compatible_with_set_level = ["TwoPlaneCoarse2FineTensorRF", "CPdecomposition", "PlaneDecomposition", "MixedTwoPlaneRF"]
+        self.compatible_with_set_level = ["TwoPlaneCoarse2FineTensorRF", "CPdecomposition", "PlaneDecomposition", "MixedTwoPlaneRF", "AppearanceTensorRF", "BrightTensoRF"]
 
     def loss(self, batch, batch_idx):
         #actually, there is nothing to do with batch 

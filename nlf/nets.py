@@ -8,9 +8,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np 
+from collections import namedtuple
 
 from nlf.embedding import WindowedPE
 from nlf.activations import get_activation
+
+
 
 
 class BaseNet(nn.Module):
@@ -207,11 +210,9 @@ class TwoPlaneCoarse2FineTensorRF(TensoRFBase):
 
     def __init__(self, in_channels, out_channels, cfg):
         super().__init__()
-        if in_channels != 4:
-            raise Exception("TwoPlaneCoarse2FineTensorRF only lightfield location (4 inputs)")
         
         self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.out_channels = out_channels if 'out_channels' not in cfg else cfg.out_channels
         
         self.n_comp = cfg.n_comp
         self.current_level = 0
@@ -220,21 +221,22 @@ class TwoPlaneCoarse2FineTensorRF(TensoRFBase):
 
         self.height_step = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
         self.width_step = self.get_stepsize(cfg.plane_init[1], cfg.plane_final[1], len(self.upsampling_epoch) + 1)
-        scale = cfg.initial_scale
+        print("plane width: ", self.width_step) 
+        self.initial_scale = cfg.initial_scale
         self.activation = get_activation(cfg.activation)
-        print("Expected width")
-        print(self.width_step)
+        self.build_net()
+
+    def build_net(self):
         self.uv_planes = []
         self.st_planes = []
-
-
         for i in range(len(self.upsampling_epoch) + 1):
-            plane_shape = (1, self.n_comp * out_channels, self.height_step[i], self.width_step[i])
-            self.uv_planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
-            self.st_planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+            plane_shape = (1, self.n_comp * self.out_channels, self.height_step[i], self.width_step[i])
+            self.uv_planes.append(torch.nn.Parameter(self.initial_scale * (2 * torch.randn(plane_shape) - 1)))
+            self.st_planes.append(torch.nn.Parameter(self.initial_scale * (2 * torch.randn(plane_shape) - 1)))
         
         self.uv_planes = torch.nn.ParameterList(self.uv_planes)
         self.st_planes = torch.nn.ParameterList(self.st_planes)
+        
 
     def set_level(self, level):
         self.current_level = level
@@ -577,6 +579,164 @@ class CombiPlaneMLP(nn.Module):
         rgb = self.activation(rgb)
         return rgb
 
+class AppearanceTensorRF(TwoPlaneCoarse2FineTensorRF):
+    def __init__(self, in_channels, out_channels, cfg):
+        self.num_fea_pe = 6 if not 'fea_pe' in cfg else cfg['fea_pe']
+        self.mlp_hidden = 128 if not 'mlp_hidden' in cfg else cfg['mlp_hidden']
+        self.basis_out_dim = 27 if not 'basis_out' in cfg else cfg['basis_out']
+        print("####### AppearanceTensorRF #########")
+        print("self.num_fea_pe", self.num_fea_pe)
+        print("self.mlp_hidden", self.mlp_hidden)
+        print("self.basis_out_dim", self.basis_out_dim)
+        
+
+        super().__init__(in_channels, out_channels, cfg)
+
+    def build_net(self):        
+        if self.num_fea_pe > 0:
+            fea_cfg = {
+                'n_freqs': self.num_fea_pe,
+                'wait_iters': 0,
+                'max_freq_iter': 25000,
+                'exclude_identity': False,
+            }
+            def to_namedtuple(name, d):
+                return namedtuple(name, d.keys())(**d)
+            fea_cfg = to_namedtuple('fea_cfg',fea_cfg)            
+            if self.basis_out_dim > 0:
+                self.basis_matrix = torch.nn.Sequential(torch.nn.Linear(self.out_channels, self.basis_out_dim,bias=False)) #apply apperance matrix (B matrix in TensorF paper)
+                pe_in_dim = self.basis_out_dim
+            else:
+                pe_in_dim = self.out_channels
+            self.fea_pe = WindowedPE(pe_in_dim, fea_cfg)
+            decoder_in_channel = self.fea_pe.out_channels                
+        else:
+            decoder_in_channel = self.out_channels
+        #decoder function (S in TensorF paper)
+        self.decoder_fn = torch.nn.Sequential(
+            torch.nn.Linear(decoder_in_channel, self.mlp_hidden), 
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.mlp_hidden, self.mlp_hidden), 
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.mlp_hidden,3)
+        )   
+        return super().build_net()
+
+    def forward(self, x, sigma_only=False):
+        uvst_grid = self.grid_normalize(x)[None,None]
+        uv = uvst_grid[...,:2]
+        st = uvst_grid[...,2:]
+        # uv_planes #torch.Size([1, 48, 300, 300])
+        uv_feature = torch.nn.functional.grid_sample(self.uv_planes[self.current_level], uv, mode='bilinear',align_corners=True)[0,:,0]
+        st_feature = torch.nn.functional.grid_sample(self.st_planes[self.current_level], st, mode='bilinear',align_corners=True)[0,:,0]
+        feature = uv_feature * st_feature #outer product in TensoRF
+        feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels)
+        feature = torch.sum(feature, dim=1)
+        if self.basis_out_dim > 0:
+            # B in TensoRF appearance branch
+            feature = self.basis_matrix(feature) 
+        # S in TensoRF apperance branch
+        if self.num_fea_pe > 0:
+            feature = self.fea_pe(feature)
+        feature = self.decoder_fn(feature)
+        output = self.activation(feature)
+        return output
+
+class BrightTensoRF(TensoRFBase):
+    #this model will keep "all" planes size which eatting up the memory.
+    #TODO: instead of use multiple level like this, we must has BIG tensor but use partial of it to train until reach final state
+
+    def __init__(self, in_channels, out_channels, cfg):
+        super().__init__()
+        if in_channels != 4:
+            raise Exception("TwoPlaneCoarse2FineTensorRF only lightfield location (4 inputs)")
+        
+        out_channels = 32
+        self.in_channels = in_channels
+        self.out_channels = out_channels #4 #out_channels
+        
+        self.n_comp = cfg.n_comp
+        self.current_level = 0
+        self.upsampling_epoch = cfg.upsampling_epoch
+        self.bounds = torch.tensor(cfg.bounds)
+
+        self.height_step = self.get_stepsize(cfg.plane_init[0], cfg.plane_final[0], len(self.upsampling_epoch) + 1)
+        self.width_step = self.get_stepsize(cfg.plane_init[1], cfg.plane_final[1], len(self.upsampling_epoch) + 1)
+        scale = cfg.initial_scale
+        self.activation = get_activation(cfg.activation)
+        print("Expected width")
+        print(self.width_step)
+        self.uv_planes = []
+        self.st_planes = []
+
+        self.lin1 = torch.nn.Linear(self.out_channels,128)
+        self.lin2 = torch.nn.Linear(128,128)
+        self.lin3 = torch.nn.Linear(128,3)
+        self.relu = torch.nn.ReLU()
+
+
+        for i in range(len(self.upsampling_epoch) + 1):
+            plane_shape = (1, self.n_comp * out_channels, self.height_step[i], self.width_step[i])
+            self.uv_planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+            self.st_planes.append(torch.nn.Parameter(scale * (2 * torch.randn(plane_shape) - 1)))
+        
+        self.uv_planes = torch.nn.ParameterList(self.uv_planes)
+        self.st_planes = torch.nn.ParameterList(self.st_planes)
+
+        self.coef = torch.nn.Parameter(torch.randn(self.n_comp))
+
+        #self.coef = torch.nn.ParameterList(torch.randn(self.n_comp))
+
+    def set_level(self, level):
+        self.current_level = level
+        prev = level-1
+        if prev >= 0:
+            #interpolate value from previous level
+            with torch.no_grad():
+                H = self.height_step[level]
+                W = self.width_step[level]
+                print("Set plane resolution to: (",H,",",W,")")
+                uv_plane = F.interpolate(self.uv_planes[prev].data, size=(H, W), mode='bilinear',  align_corners=True)
+                st_plane = F.interpolate(self.st_planes[prev].data, size=(H, W), mode='bilinear',  align_corners=True)
+                self.uv_planes[level].data = (uv_plane)
+                self.st_planes[level].data = (st_plane)
+            
+    def forward(self, x, sigma_only=False):
+        uvst_grid = self.grid_normalize(x)[None,None]
+        uv = uvst_grid[...,:2]
+        st = uvst_grid[...,2:]
+        # uv_planes #torch.Size([1, 48, 300, 300])
+        #using this one
+        uv_feature = torch.nn.functional.grid_sample(self.uv_planes[self.current_level], uv, mode='bilinear',align_corners=True)[0,:,0]
+        st_feature = torch.nn.functional.grid_sample(self.st_planes[self.current_level], st, mode='bilinear',align_corners=True)[0,:,0]
+        #print(uv_feature.shape,st_feature.shape)
+        feature = uv_feature * st_feature #outer product in TensoRF
+        #print(feature.shape,self.n_comp,self.out_channels)
+        feature = feature.permute(1,0).view(-1,self.n_comp,self.out_channels)
+        #print(feature.shape)
+        #print(self.n_comp)pi
+        #torch.einsum('ii->i', torch.randn(4, 4))
+        #print(feature.shape,self.coef.shape)
+
+        feature = torch.einsum('BNC,N->BC',feature,self.coef)
+        #feature = torch.sum(feature,dim=1) #combine product across componenet
+        #print(feature.shape)
+        #feature = torch.einsum('BNC,N->BC',feature,self.coef)
+        #,self.coef.shape)
+        #print(self.in_channels,self.out_channels,feature.shape)
+        # my own implementation
+        feature = self.relu(self.lin1(feature))
+        feature = self.relu(self.lin2(feature))
+        #feature = self.lin2(feature)
+        feature = self.lin3(feature)
+
+
+
+
+
+
+        output = self.activation(feature)
+        return output
 
 
 net_dict = {
@@ -586,6 +746,8 @@ net_dict = {
     'twoplane_mlp': TwoPlaneMLP,
     'combiplane_mlp': CombiPlaneMLP,
     'twoplane_c2f_tensorf': TwoPlaneCoarse2FineTensorRF,
+    'apperance_tensorf': AppearanceTensorRF,
+    'bright_tensorf': BrightTensoRF,
     'mixed_twoplane': MixedTwoPlaneRF,
     'cp_decomposition': CPdecomposition,
     'plane_decomposition': PlaneDecomposition
