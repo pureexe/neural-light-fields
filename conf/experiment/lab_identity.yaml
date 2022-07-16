@@ -1,0 +1,11 @@
+defaults:
+  - params: local_simplelightfield
+  - dataset: shiny_dense_lab
+  - model: shiny_identity
+  - training: shiny_lf_2022-07-08
+  - regularizers: all 
+  - visualizers: all
+  - _self_
+
+params:
+  name: lab_identity
